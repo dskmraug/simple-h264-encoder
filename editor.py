@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QComboBox, QSpinBox, QFileDialog,
+    QPushButton, QLabel, QComboBox, QSpinBox, QDoubleSpinBox, QFileDialog,
     QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsRectItem,
     QGraphicsLineItem, QGraphicsSimpleTextItem, QSizePolicy, QProgressDialog,
     QMessageBox, QFrame, QGridLayout, QGroupBox, QGraphicsItem,
@@ -42,6 +42,27 @@ def ms_to_ts(ms: int) -> str:
     if h:
         return f"{h}:{m:02d}:{s:02d}.{frac:03d}"
     return f"{m:02d}:{s:02d}.{frac:03d}"
+
+
+def atempo_chain(speed: float) -> list[str]:
+    """Build an atempo filter list for any speed in [0.1, 3.0].
+
+    Each atempo stage is clamped to [0.5, 2.0] per FFmpeg's requirement,
+    so extreme values are achieved by chaining multiple stages.
+    """
+    if abs(speed - 1.0) < 0.001:
+        return []
+    stages: list[str] = []
+    remaining = speed
+    while remaining > 2.0 + 1e-9:
+        stages.append("atempo=2.0")
+        remaining /= 2.0
+    while remaining < 0.5 - 1e-9:
+        stages.append("atempo=0.5")
+        remaining /= 0.5
+    if abs(remaining - 1.0) > 0.001:
+        stages.append(f"atempo={remaining:.6f}")
+    return stages
 
 
 # ── Crop handle (corner square) ───────────────────────────────────────────────
@@ -483,10 +504,30 @@ class VideoEditor(QMainWindow):
         for b in (self.btn_in, self.btn_out, self.btn_trim_reset):
             b.setEnabled(False)
             b.setFixedWidth(96)
+
+        # speed control
+        self.lbl_speed = QLabel("速度:")
+        self.lbl_speed.setStyleSheet("color:#aaa;")
+        self.sp_speed = QDoubleSpinBox()
+        self.sp_speed.setRange(0.1, 3.0)
+        self.sp_speed.setSingleStep(0.1)
+        self.sp_speed.setDecimals(1)
+        self.sp_speed.setValue(1.0)
+        self.sp_speed.setSuffix(" x")
+        self.sp_speed.setFixedWidth(72)
+        self.sp_speed.setToolTip("再生速度 (0.1x〜3.0x)。エクスポートにも反映されます。")
+        self.btn_speed_reset = QPushButton("1x")
+        self.btn_speed_reset.setFixedWidth(32)
+        self.btn_speed_reset.setToolTip("速度を 1.0x にリセット")
+
         tb.addWidget(self.btn_open)
         tb.addWidget(self.btn_play)
         tb.addWidget(self.lbl_time)
         tb.addStretch()
+        tb.addWidget(self.lbl_speed)
+        tb.addWidget(self.sp_speed)
+        tb.addWidget(self.btn_speed_reset)
+        tb.addSpacing(16)
         tb.addWidget(self.btn_in)
         tb.addWidget(self.btn_out)
         tb.addWidget(self.btn_trim_reset)
@@ -563,6 +604,9 @@ class VideoEditor(QMainWindow):
 
         self.combo_res.currentTextChanged.connect(
             lambda t: self.custom_w.setVisible(t == "Custom"))
+
+        self.sp_speed.valueChanged.connect(self._on_speed_changed)
+        self.btn_speed_reset.clicked.connect(lambda: self.sp_speed.setValue(1.0))
 
         for sp in (self.sp_cx, self.sp_cy, self.sp_cw, self.sp_ch):
             sp.valueChanged.connect(self._spinbox_to_crop)
@@ -655,6 +699,13 @@ class VideoEditor(QMainWindow):
         self._in = 0; self._out = self._dur
         self.tl.set_in(0); self.tl.set_out(self._dur)
 
+    def _on_speed_changed(self, speed: float):
+        self._player.setPlaybackRate(speed)
+        # highlight when not 1.0x
+        style = ("color:#ffcc44; font-weight:bold;" if abs(speed - 1.0) > 0.05
+                 else "color:#aaa;")
+        self.lbl_speed.setStyleSheet(style)
+
     # ── crop sync ────────────────────────────────────────────────────────────
 
     def _on_crop_changed(self, rect: QRectF):
@@ -694,6 +745,7 @@ class VideoEditor(QMainWindow):
 
     def _build_cmd(self, out: Path) -> list[str]:
         cmd = ["ffmpeg", "-y"]
+        speed = round(self.sp_speed.value(), 1)
         in_s  = self._in  / 1000
         dur_s = (self._out - self._in) / 1000
         if in_s > 0:
@@ -701,20 +753,27 @@ class VideoEditor(QMainWindow):
         cmd += ["-i", str(self._src)]
         cmd += ["-t", f"{dur_s:.3f}"]
 
-        filters = []
+        # ── video filters ──
+        vf: list[str] = []
         if not self.view.is_full_crop():
             cr = self.view.get_crop()
             x, y = int(cr.x()), int(cr.y())
-            w = int(cr.width())  & ~1   # ensure even
+            w = int(cr.width())  & ~1   # ensure even for libx264
             h = int(cr.height()) & ~1
-            filters.append(f"crop={w}:{h}:{x}:{y}")
-
+            vf.append(f"crop={w}:{h}:{x}:{y}")
         res = self._output_res()
         if res:
-            filters.append(f"scale={res[0]}:{res[1]}")
+            vf.append(f"scale={res[0]}:{res[1]}")
+        if abs(speed - 1.0) > 0.001:
+            # setpts compresses/stretches timestamps: PTS/speed → faster when speed>1
+            vf.append(f"setpts=PTS/{speed:.6f}")
+        if vf:
+            cmd += ["-vf", ",".join(vf)]
 
-        if filters:
-            cmd += ["-vf", ",".join(filters)]
+        # ── audio filters ──
+        af = atempo_chain(speed)
+        if af:
+            cmd += ["-af", ",".join(af)]
 
         cmd += ["-c:v", "libx264", "-crf", "23", "-preset", "medium"]
         cmd += ["-map", "0:v:0", "-map", "0:a:0?"]
