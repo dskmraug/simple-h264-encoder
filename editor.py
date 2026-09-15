@@ -466,9 +466,12 @@ class VideoEditor(QMainWindow):
         self._ticker.start()
 
         if not shutil.which("ffmpeg"):
+            if sys.platform == "win32":
+                install_hint = "winget install ffmpeg  または  https://ffmpeg.org/download.html からインストールしてください。"
+            else:
+                install_hint = "brew install ffmpeg でインストールしてください。"
             QMessageBox.warning(self, "ffmpeg not found",
-                                "ffmpeg が見つかりません。エクスポートは動作しません。\n"
-                                "brew install ffmpeg でインストールしてください。")
+                                f"ffmpeg が見つかりません。エクスポートは動作しません。\n{install_hint}")
 
     # ── UI construction ──────────────────────────────────────────────────────
 
