@@ -44,9 +44,9 @@ AviUtl風のUXで、H.264動画のクロップ・トリム・解像度変換をG
 ### 前提条件
 
 - Python 3.10 以上
-- macOS (AVFoundationバックエンドを使用)
+- macOS または Windows 10 以降
 
-### 手順
+### macOS
 
 ```bash
 # 1. FFmpeg をインストール
@@ -63,6 +63,47 @@ pip3 install -r requirements.txt
 python3 editor.py
 ```
 
+### Windows
+
+```powershell
+# 1. FFmpeg をインストール（winget を使う場合）
+winget install ffmpeg
+
+# または https://ffmpeg.org/download.html から手動でダウンロードし、
+# 解凍した bin フォルダを PATH に追加してください。
+
+# 2. リポジトリをクローン
+git clone https://github.com/dskmraug/simple-h264-encoder.git
+cd simple-h264-encoder
+
+# 3. PySide6 をインストール
+pip install -r requirements.txt
+
+# 4. 起動
+python editor.py
+```
+
+#### Windows での動画再生について
+
+動画再生には Windows 標準の **Windows Media Foundation (WMF)** バックエンドが使われます。
+H.264 / MP4 は Windows 10 以降で標準対応しており、通常は追加設定不要です。
+
+`.mov` など WMF が対応していない形式を再生したい場合、または再生が不安定な場合は、
+Qt の **FFmpeg マルチメディアバックエンド**に切り替えることで改善することがあります。
+
+```powershell
+# コマンドプロンプト / PowerShell で設定してから起動する場合
+set QT_MEDIA_BACKEND=ffmpeg      # cmd.exe
+$env:QT_MEDIA_BACKEND="ffmpeg"   # PowerShell
+python editor.py
+```
+
+永続的に設定する場合は、システムの「環境変数の編集」から
+`QT_MEDIA_BACKEND` = `ffmpeg` を追加してください。
+
+> **注意:** FFmpeg バックエンドはソフトウェアデコードを使用するため、
+> Mac の AVFoundation と比べて CPU 使用率がやや高くなる場合があります。
+
 ## キーボードショートカット
 
 | キー | 動作 |
@@ -75,7 +116,7 @@ python3 editor.py
 
 ## 対応フォーマット
 
-**入力:** MP4, MOV, M4V, MKV, AVI, H.264, TS など（Qt AVFoundationが対応する形式）
+**入力:** MP4, MOV, M4V, MKV, AVI, H.264, TS など（macOS: AVFoundation、Windows: WMF が対応する形式）
 
 **出力:** MP4 (H.264 / AAC)
 
